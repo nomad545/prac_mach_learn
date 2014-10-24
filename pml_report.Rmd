@@ -137,7 +137,7 @@ pred.gbm.2 <- predict(fit.gbm.2, newdata = testing)
 confusionMatrix(pred.gbm.2, testing$classe)
 ```
 
-Results are as good as before:
+Results are still excellent and superior to the benchmark:
 
 Function | Accuracy | Kappa 
 -------- | -------- | -----
@@ -156,14 +156,14 @@ Accuracy is slighly improved (accuracy = 0.996, kappa = 0.995).
 
 ### Prediction Function Validation
 
-A final estimate of model accuracy is obtained by applying the stacked function to the testing dataset and comparing the results to the actual class values. 
+A final estimate of model accuracy is obtained by applying the stacked function to the validation set and comparing the results to the actual values of the classe variable in the validation set. 
 
 ```{r, eval=FALSE}
 pred.valid <- predict(fit.stack, newdata = validation)
 (cm.valid <- confusionMatrix(pred.valid, validation$classe))
 ```
 
-My final estimate of model accuracy is 0.997 (kappa = 0.997). This is an excellent result that is higher than the benchmark published accuracy.
+My final estimate of model accuracy is 0.997 (kappa = 0.997). This is very accurate and is higher than the benchmark published accuracy.
 
 ### Obtaining predicted values
 

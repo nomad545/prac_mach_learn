@@ -195,7 +195,7 @@ confusionMatrix(pred.svm.2, testing$classe)
 
 pred.gbm.2 &lt;- predict(fit.gbm.2, newdata = testing)
 confusionMatrix(pred.gbm.2, testing$classe)</code></pre>
-<p>Results are as good as before:</p>
+<p>Results are still excellent and superior to the benchmark:</p>
 <table>
 <thead>
 <tr class="header">
@@ -229,10 +229,10 @@ fit.stack &lt;- train(classe ~ . , method = &quot;rf&quot;, data = pred.data, tr
 </div>
 <div id="prediction-function-validation" class="section level3">
 <h3>Prediction Function Validation</h3>
-<p>A final estimate of model accuracy is obtained by applying the stacked function to the testing dataset and comparing the results to the actual class values.</p>
+<p>A final estimate of model accuracy is obtained by applying the stacked function to the validation set and comparing the results to the actual values of the classe variable in the validation set.</p>
 <pre class="r"><code>pred.valid &lt;- predict(fit.stack, newdata = validation)
 (cm.valid &lt;- confusionMatrix(pred.valid, validation$classe))</code></pre>
-<p>My final estimate of model accuracy is 0.997 (kappa = 0.997). This is an excellent result that is higher than the benchmark published accuracy.</p>
+<p>My final estimate of model accuracy is 0.997 (kappa = 0.997). This is very accurate and is higher than the benchmark published accuracy.</p>
 </div>
 <div id="obtaining-predicted-values" class="section level3">
 <h3>Obtaining predicted values</h3>

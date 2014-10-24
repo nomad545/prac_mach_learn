@@ -1,0 +1,188 @@
+---
+title: "Project Writeup -- Practical Machine Learning"
+output: html_document
+---
+
+```{r, echo=FALSE, message=FALSE}
+library(plyr)
+library(gbm)
+library(nnet)
+library(rpart)
+library(randomForest)
+library(caret)
+library(kernlab)
+library(data.table)
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+library(doParallel)
+library(knitr)
+load(file="project_data.RData")
+```
+
+### Prediction Study Design
+
+I divide the data into four sets: (1) a training set utilizing 60% of the sample; (2) a testing set utilizing 20% of the sample; (3) a validation set utilizing the final 20% of the sample; and --- due to the large size of the dataset --- (4) a trial training set utilizing 10% of the main training set.
+
+The full training set is used to choose features. The smaller trial training set is used to quickly evaluate and calibrate numerous prediction functions. A handful of the more successful functions will be selected for use on the full training set. Unbiased estimates of prediction accuracy will then be obtained for these functions using the testing set. Poorly performing models will be eliminated, and strongly performing models will be stacked and optimized on the testing set. An unbiased estimate of prediction accuracy for this stacked model will then be obtained from the validation set.
+
+### Benchmark Accuracy
+
+The researchers who produced the data achieved a prediction accuracy of 98.2%,[^1] which serves as a benchmark for this data.
+
+[^1]: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+### Examining the Data
+
+Examining the training data using the `summary()` command, I notice:
+
+1. The outcome variable, classe, is already encoded as a factor with 5 levels. This restricts the use of regression-type prediction functions. 
+2. There is a large amount of missing data for variables such as var_pitch_forearm and avg_yaw_forearm. Almost 98% of the values are missing. These variables are dropped from the training set.
+3. Other variables, mostly related to kurtosis and skewness, show division-by-zero errors and large proportion of unlabelled values. These variables appear to be unusable, so they are also dropped from the training set.
+4. The dataset contains variables for the names of the subjects and the dates and times of data capture. These are not utilized in the authors' study and so are dropped from my training set.
+
+### Choosing Features
+
+I begin by examining a heatmap plot of the correlation matrix of predictors (converted to absolute values). There are some pockets of high collinearity, but each variable appears independent from almost all the others. By cleaning the dataset, the number of variables has also already been reduced to a manageable number (50), so I proceed without utilizing data reduction techniques such as principal components analysis.
+
+```{r, echo=FALSE}
+cormat <- cor(train.1[,-50])
+cor.cols <- brewer.pal(9, "Blues")
+heatmap(abs(cormat), col = cor.cols, Rowv = NA, Colv = NA)
+```
+
+I notice, however, that some variables, particularly those extracted from gyroscropes, are highly skewed. The `spatialSign` type of preprocessing will thus be used to standardize the variables for parametric prediction functions such as multinomial logit regression.
+
+```{r, echo=FALSE}
+par(mfrow = c(7, 7), mar = c(3, 3, .2, .2))
+for(i in 1:49) {
+  plot(density(train.1[,i]), main = "", xlab = names(train.1)[i], ylab = "", 
+       cex = 0.8, mgp = c(1.5, 0.5, 0), col = "darkblue", lwd = 2)
+}
+```
+
+
+
+
+### Prediction Function Selection: Step 1
+
+Satisfied with the variables in the training set, I now create the 10% training set for quick model fitting and evaluation:
+```{r, eval=FALSE}
+part.ind.3 <- createDataPartition(y = train.1$classe, p = 0.1, list = FALSE)
+mini.train <- train.1[part.ind.3, ]
+```
+
+I begin with two quick linear prediction functions appropriate for a multiclass nominal outcome variable: linear discriminant analysis and multinomial logit. I use a simple 10-fold cross-validation method of resampling for speedy results.
+```{r, eval=FALSE}
+tc1 <- trainControl(method = "cv")
+fit.lda <- train(classe ~ . , data = mini.train, method = "lda", 
+                 preProcess = c("spatialSign"), trControl = tc1)
+fit.mnl <- train(classe ~ . , data = mini.train, method = "multinom", trace = FALSE, 
+                 preProcess = c("spatialSign"), trControl = tc1)
+```
+
+Results are disappointing compared with the benchmark of 98.2%:
+
+Function | Accuracy | Kappa 
+-------- | -------- | -----
+LDA      | 0.671    | 0.583
+MNL      | 0.661    | 0.570
+
+I thus move to using non-parametric and non-linear prediction functions: random forests, polynomial support vector machines and stochastic gradient boosting. The initial results are far superior to the linear functions (accuracy > .85). I then calibrate these models by permitting a broader range of tuning parameters. I use out of bag resampling to estimate accuracy for the random forest model, and 10-fold cross validation for the other two. 
+```{r, eval=FALSE}
+tc2 <- trainControl(method = "oob")
+gr1 <- expand.grid(mtry = c(10, 15, 20, 25, 30, 35, 40))
+fit.rf <- train(classe ~ . , data = mini.train, method = "rf", trControl = tc2, tuneGrid = gr1)
+
+gr2 <- expand.grid(degree = 2:4, scale = c(0.1, 0.3, 0.5), C = 1)
+fit.svm <- train(classe ~ . , data = mini.train, method = "svmPoly", preProcess = c("spatialSign"),
+                 trControl = tc1, tuneGrid = gr2)
+
+gr3 <-  expand.grid(interaction.depth = 2:5, n.trees = (3:6)*100, shrinkage = 0.1)
+fit.gbm <- train(classe ~ . , data = mini.train, method = "gbm", verbose = FALSE, 
+                 trControl = tc1, tuneGrid = gr2)
+```
+
+At their optimal tuning parameters, prediction results are much better, although still short of the benchmark accuracy. 
+
+Function | Accuracy | Kappa 
+-------- | -------- | -----
+RF       | 0.918    | 0.896
+SVM      | 0.875    | 0.842
+GBM      | 0.922    | 0.901
+
+
+### Prediction Function Selection: Step 2
+
+Next I re-optimize these three models using the full training set. I also use a more robust method of resampling: bootstrap resampling with the 632 adjustment and 25 interations. I once again use the `train()` function from the `caret` package, although now with a smaller band of tuning parameters derived from my exploratory models. All three functions now have excellent prediction accuracy with this full training set.
+
+Function | Accuracy | Kappa 
+-------- | -------- | -----
+RF       | 0.992    | 0.989
+SVM      | 0.991    | 0.989
+GBM      | 0.990    | 0.987
+
+### Prediction Function Testing
+
+As these 3 functions were selected and tuned to the training set, these estimates of accuracy may be biased. To verify their accuracy, I compare the predicted classes obtained by applying these 3 models to the testing set.
+
+```{r, eval=FALSE}
+pred.rf.2 <- predict(fit.rf.2, newdata = testing)
+confusionMatrix(pred.rf.2, testing$classe)
+
+pred.svm.2 <- predict(fit.svm.2, newdata = testing)
+confusionMatrix(pred.svm.2, testing$classe)
+
+pred.gbm.2 <- predict(fit.gbm.2, newdata = testing)
+confusionMatrix(pred.gbm.2, testing$classe)
+```
+
+Results are as good as before:
+
+Function | Accuracy | Kappa 
+-------- | -------- | -----
+RF       | 0.993    | 0.991
+SVM      | 0.995    | 0.994
+GBM      | 0.993    | 0.991
+
+I retain all three functions and create a stacked function for my final predictions. Given that the three sets of predictors are multiclass nominal variables, I use a random tree to combine the functions. This stacked model is optimized on the testing set:
+
+```{r, eval=FALSE}
+pred.data <- data.frame(pred.rf.2, pred.svm.2, pred.gbm.2, classe = testing$classe)
+fit.stack <- train(classe ~ . , method = "rf", data = pred.data, trControl = tc1)
+```
+
+Accuracy is slighly improved (accuracy = 0.996, kappa = 0.995).
+
+### Prediction Function Validation
+
+A final estimate of model accuracy is obtained by applying the stacked function to the testing dataset and comparing the results to the actual class values. 
+
+```{r, eval=FALSE}
+pred.valid <- predict(fit.stack, newdata = validation)
+(cm.valid <- confusionMatrix(pred.valid, validation$classe))
+```
+
+My final estimate of model accuracy is 0.997 (kappa = 0.997). This is an excellent result that is higher than the benchmark published accuracy.
+
+### Obtaining predicted values
+
+To obtain predicted values for the 20 cases, I apply all three models to the data:
+
+```{r, eval=FALSE}
+pred.rf.3 <- predict(fit.rf.2, newdata = pml.testing)
+pred.svm.3 <- predict(fit.svm.2, newdata = pml.testing)
+pred.gbm.3 <- predict(fit.gbm.2, newdata = pml.testing)
+pred.fin.data <- data.frame(pred.rf.3, pred.svm.3, pred.gbm.3)
+```
+
+The predicted classes are identical across the 3 models, so there is no need to average or combine the predictions in any way. 
+
+
+
+
+
+
+
+
+
